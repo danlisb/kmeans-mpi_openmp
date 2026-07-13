@@ -1,0 +1,17 @@
+# binários
+/kmeans
+/gen_dataset
+*.o
+
+# saídas geradas
+*.out.csv
+clusters.csv
+centroids.csv
+/data/
+
+# macOS
+.DS_Store
+
+# artefatos internos (não versionar)
+.claude/
+docs/superpowers/
