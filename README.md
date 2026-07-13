@@ -14,6 +14,29 @@ ambiente MPI onde **os nós não compartilham disco** (ver seção
 
 ---
 
+## Início rápido (Linux / plataforma da disciplina)
+
+Em Linux com `gcc` (que já tem `-fopenmp` nativo) não é preciso nenhum ajuste:
+
+```bash
+# 1. compilar (gera os binários kmeans e gen_dataset)
+make
+
+# 2. gerar um dataset de teste (1.000.000 pontos, 16 dims, 24 clusters)
+./gen_dataset 1000000 16 24 data/bench.csv 42 2
+
+# 3a. clusterizar (4 processos MPI x 4 threads OpenMP)
+OMP_NUM_THREADS=4 mpirun -np 4 ./kmeans data/bench.csv clusters.csv centroids.csv 24
+
+# 3b. OU medir o speedup variando processos e threads
+./run_benchmark.sh
+```
+
+Rode `make test` para validar a correção. No **macOS** é preciso um passo extra de
+instalação — ver [Requisitos › macOS](#macos) abaixo.
+
+---
+
 ## Requisitos
 
 - Uma implementação de MPI (ex.: **OpenMPI** ou **MPICH**) com `mpicc` e `mpirun`.
