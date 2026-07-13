@@ -1,8 +1,8 @@
 # Clustering de grandes conjuntos de dados com K-means usando MPI + OpenMP
 
-> **Disciplina:** Programação Paralela e Distribuída (MPI + OpenMP)
-> **Tema:** Clustering de grandes conjuntos de dados com K-means
-> **Autor:** _(preencher)_
+> **Disciplina:** Introdução ao Processamento Paralelo e Distribuído
+> **Tema:** Clustering de grandes conjuntos de dados com K-means (MPI + OpenMP)
+> **Autor:** Daniel Lisboa Pereira
 > **Data:** julho de 2026
 
 ---
