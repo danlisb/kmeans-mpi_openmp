@@ -151,6 +151,10 @@ OMP_NUM_THREADS=4 mpirun --hostfile hosts -np 4 --bind-to none -x OMP_NUM_THREAD
     ./kmeans data/bench.csv clusters.csv centroids.csv 24
 ```
 
+Execução real nos 4 nós (o `procs=4` confirma a distribuição; só o rank 0 leu o disco):
+
+![Execução distribuída no cluster Xivoco](docs/img/execucao-xivoco.png)
+
 Notas:
 
 - **`--bind-to none`** importa no modo híbrido: sem ela, o OpenMPI fixa cada

@@ -193,6 +193,12 @@ memória nem disco**. A execução distribuída também confirmou, na prática, 
 **contorno do disco não-compartilhado**: apenas o rank 0 (no `master`) leu o CSV;
 os demais nós receberam seus blocos pela rede.
 
+![Execução distribuída no cluster Xivoco](img/execucao-xivoco.png)
+
+*Figura 1 — Execução nos 4 nós do Xivoco: o binário é replicado nos workers via
+`scp`, o hostfile lista os 4 nós (`slots=1`) e a saída `procs=4` confirma a
+execução distribuída; o rank 0, no `master`, foi o único a acessar o disco.*
+
 **Por que as threads OpenMP não ajudam no Xivoco.** Acrescentar threads não
 reduz o tempo — chega a piorar:
 
