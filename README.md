@@ -126,6 +126,44 @@ cluster_id,centroid_0,centroid_1,size
 
 ---
 
+## Rodando no cluster (nós separados, disco não compartilhado)
+
+No cenário-alvo, os nós **não compartilham disco**: o executável precisa existir
+em **cada** nó, mas os **dados ficam só no nó do rank 0**. Supondo apelidos SSH
+`master`, `worker-1`, … já configurados:
+
+```bash
+# 1. compilar no master e gerar os dados (só o rank 0 lê disco)
+make
+./gen_dataset 1000000 16 24 data/bench.csv 42 10
+
+# 2. replicar o BINÁRIO nos workers, no mesmo caminho (os dados NÃO vão junto)
+for h in worker-1 worker-2 worker-3; do
+  ssh $h 'mkdir -p ~/kmeans-mpi_openmp'
+  scp kmeans $h:~/kmeans-mpi_openmp/
+done
+
+# 3. hostfile: 1 processo MPI por nó
+printf 'master slots=1\nworker-1 slots=1\nworker-2 slots=1\nworker-3 slots=1\n' > hosts
+
+# 4. rodar nos 4 nós (o rank 0 cai no master, único com os dados)
+OMP_NUM_THREADS=4 mpirun --hostfile hosts -np 4 --bind-to none -x OMP_NUM_THREADS \
+    ./kmeans data/bench.csv clusters.csv centroids.csv 24
+```
+
+Notas:
+
+- **`--bind-to none`** importa no modo híbrido: sem ela, o OpenMPI fixa cada
+  processo a um único núcleo e as threads OpenMP não se espalham.
+- Se o ambiente limita **1 vCPU por nó/pod** (comum em clusters Kubernetes —
+  confira com `cat /sys/fs/cgroup/cpu.max`), o ganho vem do **MPI** (mais nós), e
+  não das threads: cada nó tem só um núcleo para as threads dividirem.
+- `git clone` em um nó sem certificados raiz (erro `server certificate
+  verification failed`): use `git -c http.sslVerify=false clone …` ou instale o
+  pacote `ca-certificates`.
+
+---
+
 ## Como funciona
 
 ```

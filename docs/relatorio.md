@@ -138,18 +138,81 @@ determinística e o resultado independe do número de processos.
 
 ## 5. Metodologia experimental
 
-- **Máquina:** CPU de 10 núcleos.
-- **Toolchain:** OpenMPI 5 + GCC com `-O3 -fopenmp`.
-- **Dataset:** `N = 1.000.000` pontos, `D = 16` dimensões, `K = 24` clusters,
-  gerado sinteticamente (`spread = 2`, convergindo em ~38 iterações).
-- **Medida:** tempo do **núcleo paralelo** (distribuição + iterações + coleta),
-  obtido com `MPI_Wtime`. A leitura/escrita de arquivo e o seeding serial ficam
-  **fora** da medição, pois são pré-processamento e não fazem parte da porção
-  paralelizável cujo *speedup* se deseja avaliar.
-- Variou-se o número de processos MPI (`P ∈ {1, 2, 4}`) e de threads OpenMP
-  (`T ∈ {1, 2, 4}`). O *speedup* é `tempo(1,1) / tempo(P,T)`.
+Os experimentos usaram **dois ambientes**, cada um exercendo melhor um nível de
+paralelismo.
+
+### 5.1. Ambiente principal — cluster Xivoco (plataforma da disciplina)
+
+- **Infraestrutura:** 4 nós (`master` + 3 `worker`), cada um um contêiner (pod
+  Kubernetes) da imagem `mpi-node`, com **disco não compartilhado** entre os nós
+  — exatamente o cenário tratado na Seção 3.
+- **Limite de CPU:** cada pod é limitado a **1 vCPU** pela cota de *cgroup*
+  (`/sys/fs/cgroup/cpu.max` = `100000 100000`), embora `nproc` reporte 4 (os
+  núcleos do nó físico, não a cota do contêiner). Consequência: o paralelismo
+  **entre nós (MPI)** ganha uma vCPU a cada nó adicionado, mas o paralelismo de
+  **threads (OpenMP) dentro de um pod** não encontra núcleos livres para ocupar.
+- **Toolchain:** OpenMPI + GCC `-O3 -fopenmp`.
+- **Dataset:** `N = 1.000.000` pontos, `D = 16`, `K = 24` (`spread = 10`). O
+  número de iterações foi fixado no teto (**100 iterações**), garantindo carga
+  **idêntica** em todas as configurações e isolando o *speedup* de efeitos de
+  convergência.
+- **Execução distribuída:** o binário é replicado nos nós via `scp` (o disco não
+  é compartilhado); os **dados ficam só no rank 0**; roda-se com
+  `mpirun --hostfile ... -np P --bind-to none -x OMP_NUM_THREADS`.
+
+### 5.2. Ambiente de referência — máquina multicore
+
+Como cada pod do Xivoco tem apenas 1 vCPU, a escalabilidade **OpenMP** (memória
+compartilhada) foi medida numa máquina **multicore de 10 núcleos**, para
+demonstrar o ganho das threads quando há núcleos disponíveis. Dataset
+`N = 1.000.000`, `D = 16`, `K = 24` (`spread = 2`, ~38 iterações).
+
+### 5.3. Medida
+
+O tempo reportado é o do **núcleo paralelo** (distribuição + iterações + coleta),
+obtido com `MPI_Wtime`; a leitura/escrita de arquivo e o *seeding* serial ficam
+**fora** da medição, por serem pré-processamento não paralelizado. O *speedup* é
+`tempo_base / tempo(config)`.
 
 ## 6. Resultados
+
+### 6.1. Cluster Xivoco — escalabilidade MPI entre nós
+
+Variando o número de nós MPI (`P`), com 1 vCPU por pod (`T = 1`):
+
+| Nós (P) | vCPUs | Tempo (s) | Speedup |
+|:---:|:---:|:---:|:---:|
+| 1 | 1 | 29.59 | 1.00 |
+| 2 | 2 | 15.42 | 1.92 |
+| 4 | 4 |  8.13 | 3.64 |
+
+O *speedup* é **quase linear** (eficiência de ~91% em 4 nós). Isso valida o cerne
+do trabalho: a distribuição dos registros por `MPI_Scatterv` e a redução global
+dos centroides por `MPI_Allreduce` escalam bem entre nós que **não compartilham
+memória nem disco**. A execução distribuída também confirmou, na prática, o
+**contorno do disco não-compartilhado**: apenas o rank 0 (no `master`) leu o CSV;
+os demais nós receberam seus blocos pela rede.
+
+**Por que as threads OpenMP não ajudam no Xivoco.** Acrescentar threads não
+reduz o tempo — chega a piorar:
+
+| Configuração | Tempo (s) |
+|:---|:---:|
+| 1 nó × 1 thread  | 29.59 |
+| 1 nó × 4 threads | 31.57 |
+| 4 nós × 1 thread |  8.13 |
+| 4 nós × 4 threads | 10.86 |
+
+A causa é o limite de **1 vCPU por pod**: as threads de um mesmo processo disputam
+o único núcleo disponível, sem ganho e ainda com *overhead* de gerência. Não é
+limitação do código — é do ambiente. (Detalhe de execução: sem `--bind-to none`,
+o OpenMPI ainda fixa cada processo a um núcleo por padrão, agravando o efeito; a
+flag foi usada em todas as medições.)
+
+### 6.2. Máquina multicore de referência — escalabilidade OpenMP e híbrida
+
+Na máquina de 10 núcleos, onde há núcleos livres para as threads, os **dois**
+níveis de paralelismo contribuem:
 
 | Processos (P) | Threads (T) | Tempo (s) | Speedup |
 |:---:|:---:|:---:|:---:|
@@ -163,23 +226,22 @@ determinística e o resultado independe do número de processos.
 | 4 | 2 |  2.69 | 5.24 |
 | 4 | 4 |  2.62 | 5.38 |
 
-### Análise
+- **Escalabilidade OpenMP** (fixando `P=1`): 1.93× com 2 threads e 3.54× com 4 — o
+  passo de atribuição é altamente paralelizável, com pouca sincronização (apenas
+  a fusão dos buffers por thread).
+- **Escalabilidade MPI** (fixando `T=1`): 1.89× e 3.26×; ganho ligeiramente menor
+  por causa da comunicação do `Allreduce` a cada iteração.
+- **Modelo híbrido:** as melhores marcas (~5.4×) vêm da combinação (`2×4`, `4×4`),
+  aproveitando as duas vias de paralelismo dentro dos 10 núcleos.
 
-- **Escalabilidade OpenMP** (fixando `P=1`): de 1 para 2 threads o *speedup* é
-  1.93× (quase ideal) e de 1 para 4 threads é 3.54×. O passo de atribuição é
-  altamente paralelizável, com pouca sincronização (apenas a fusão dos buffers
-  por thread).
-- **Escalabilidade MPI** (fixando `T=1`): 1.89× com 2 processos e 3.26× com 4
-  processos. O ganho é ligeiramente menor que o do OpenMP porque o `Allreduce`
-  introduz comunicação a cada iteração.
-- **Modelo híbrido:** as melhores marcas vêm da combinação — `2×4` e `4×2`
-  atingem ~5.3×, aproveitando 8 vias de paralelismo dentro dos 10 núcleos.
-- **Sobre-subscrição:** `4×4` (16 threads em 10 núcleos) praticamente não melhora
-  em relação a `4×2`, pois passa a haver mais threads que núcleos físicos — em
-  linha com a **Lei de Amdahl** e com a contenção por recursos.
+### 6.3. Síntese
 
-O experimento confirma que **ambos** os níveis de paralelismo contribuem e que a
-combinação MPI + OpenMP é a mais eficiente, como esperado do modelo híbrido.
+O Xivoco (ambiente exigido) demonstra a **escalabilidade MPI** e o **contorno do
+disco não-compartilhado** em nós realmente separados; a máquina multicore
+demonstra a **escalabilidade OpenMP** que o limite de 1 vCPU por pod impede de
+observar no cluster. Juntos, os dois ambientes confirmam que **ambos** os níveis
+de paralelismo funcionam, e a validação `serial ≡ paralelo` (Seção 4.3) garante
+que a paralelização não altera o resultado.
 
 ## 7. Conclusão
 
@@ -187,10 +249,14 @@ Implementou-se o K-means para grandes conjuntos de dados com paralelismo
 híbrido: MPI distribuindo os registros e reduzindo globalmente os centroides, e
 OpenMP paralelizando o cálculo das distâncias locais. A restrição de **disco não
 compartilhado** foi resolvida centralizando todo o I/O no rank 0 e distribuindo
-os dados pela rede com `Scatterv`/`Gatherv`. Os experimentos mostraram *speedup*
-de até **5.4×** em uma máquina de 10 núcleos, com escalabilidade consistente
-tanto em MPI quanto em OpenMP, e a validação confirmou que a versão paralela
-produz **exatamente o mesmo resultado** da serial.
+os dados pela rede com `Scatterv`/`Gatherv` — o que foi confirmado **na prática**
+no cluster Xivoco, com nós (pods) realmente separados.
+
+No Xivoco, a escalabilidade **MPI** foi quase linear (**3.64×** em 4 nós,
+eficiência ~91%); a escalabilidade **OpenMP** não pôde ser exercida ali por cada
+pod ter apenas 1 vCPU, mas foi confirmada na máquina multicore, onde o modelo
+híbrido atingiu **~5.4×**. Em ambos os ambientes, a validação mostrou que a
+versão paralela produz **exatamente o mesmo resultado** da serial.
 
 ## Referências
 
